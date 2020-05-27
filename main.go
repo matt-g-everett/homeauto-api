@@ -1,59 +1,112 @@
 package main
 
 import (
-	"encoding/json"
+	"bytes"
+	"context"
 	"fmt"
 	"io/ioutil"
+	"log"
+	"net/http"
+	"os"
 	"path"
 	"runtime"
 	"time"
 
-	"github.com/dgrijalva/jwt-go"
+	"golang.org/x/oauth2"
+	"google.golang.org/api/idtoken"
+	"gopkg.in/yaml.v2"
 )
 
-func register() {
+type appConfig struct {
+	RegisterFunction string `yaml:"registerFunction"`
+	ClientID         string `yaml:"clientId"`
+}
+
+type registrar struct {
+	config appConfig
+}
+
+func newRegistrar(config appConfig) *registrar {
+	r := new(registrar)
+	r.config = config
+
+	return r
+}
+
+func (r *registrar) getWanIP() (string, error) {
+	ip := []byte(nil)
+	resp, err := http.Get("https://api.ipify.org")
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	ip, err = ioutil.ReadAll(resp.Body)
+	return string(ip), err
+}
+
+func (r *registrar) createIdentityToken() (*oauth2.Token, error) {
 	_, filename, _, _ := runtime.Caller(0)
 	credentialsPath := path.Dir(filename) + "/config/credentials.json"
-	b, _ := ioutil.ReadFile(credentialsPath)
-	var j struct {
-		ClientID     string `json:"client_id"`
-		ClientEmail  string `json:"client_email"`
-		PrivateKeyID string `json:"private_key_id"`
-		PrivateKey   string `json:"private_key"`
+
+	aud := r.config.ClientID
+	ctx := context.Background()
+	ts, err := idtoken.NewTokenSource(ctx, aud, idtoken.WithCredentialsFile(credentialsPath))
+	if err != nil {
+		log.Printf("Failed to create TokenSource: %v", err)
+		return nil, err
+	}
+	tok, err := ts.Token()
+	return tok, err
+}
+
+func (r *registrar) callRegister(ip string, token oauth2.Token) {
+	client := &http.Client{}
+	data := fmt.Sprintf("{\"ip\": \"%s\"}", ip)
+	req, err := http.NewRequest("POST", r.config.RegisterFunction,
+		bytes.NewBuffer([]byte(data)))
+	if err != nil {
+		log.Printf("Failed to create request for register cloud function: %v", err)
+		return
+	}
+	req.Header.Add("Content-type", "application/json")
+	req.Header.Add("Accepts", "text/plain")
+	req.Header.Add("Authorization", "Bearer "+token.AccessToken)
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("Failed to call register cloud function: %v", err)
+		return
 	}
 
-	json.Unmarshal(b, &j)
-	signKey, _ := jwt.ParseRSAPrivateKeyFromPEM([]byte(j.PrivateKey))
-
-	type GCPClaims struct {
-		AZP           string `json:"azp"`
-		Email         string `json:"email"`
-		EmailVerified bool   `json:"email_verified"`
-		jwt.StandardClaims
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		log.Printf("register cloud function failed with response code %d", resp.StatusCode)
+		return
 	}
 
-	// Create the Claims
-	claims := GCPClaims{
-		j.ClientEmail,
-		j.ClientEmail,
-		true,
-		jwt.StandardClaims{
-			Audience:  "32555940559.apps.googleusercontent.com",
-			Issuer:    "https://accounts.google.com",
-			ExpiresAt: 1590364208,
-			IssuedAt:  1590360608,
-			Subject:   j.ClientID,
-		},
-	}
+	log.Printf("Set IP for homeauto-api to %s", ip)
+}
 
-	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
-	token.Header["kid"] = j.PrivateKeyID
-	ss, _ := token.SignedString(signKey)
-	fmt.Printf("%v", ss)
+func (r *registrar) register() {
+	token, _ := r.createIdentityToken()
+	ip, _ := r.getWanIP()
+	log.Printf("Discovered WAN IP: %s\n", ip)
+	r.callRegister(ip, *token)
 }
 
 func main() {
-	register()
+	_, filename, _, _ := runtime.Caller(0)
+	configPath := path.Dir(filename) + "/config/config.yaml"
+
+	var config appConfig
+	f, err := os.Open(configPath)
+	if err != nil {
+		panic(err)
+	}
+	decoder := yaml.NewDecoder(f)
+	err = decoder.Decode(&config)
+
+	registrar := newRegistrar(config)
+	registrar.register()
 	registerTimer := time.NewTicker(5 * time.Second)
 	for {
 		select {
