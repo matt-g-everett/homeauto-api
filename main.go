@@ -3,7 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
-	"fmt"
+	"encoding/json"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -60,10 +60,14 @@ func (r *registrar) createIdentityToken() (*oauth2.Token, error) {
 }
 
 func (r *registrar) callRegister(ip string, token oauth2.Token) {
+	data := struct {
+		IP string `json:"ip"`
+	}{ip}
+	body, _ := json.Marshal(data)
+
 	client := &http.Client{}
-	data := fmt.Sprintf("{\"ip\": \"%s\"}", ip)
 	req, err := http.NewRequest("POST", r.config.RegisterFunction,
-		bytes.NewBuffer([]byte(data)))
+		bytes.NewBuffer(body))
 	if err != nil {
 		log.Printf("Failed to create request for register cloud function: %v", err)
 		return
@@ -111,7 +115,7 @@ func main() {
 	for {
 		select {
 		case <-registerTimer.C:
-			register()
+			registrar.register()
 		}
 	}
 }
