@@ -1,0 +1,15 @@
+global:
+  productName: homeauto
+
+replicaCount: 1
+image:
+  repository: matteverett/homeauto-api
+  tag: "0.1.0"
+  pullPolicy: Always
+
+comms:
+  nodePort: 31080
+
+clientId: 32555940559.apps.googleusercontent.com
+registration:
+  functionUrl: https://cloudfunctions.net/register

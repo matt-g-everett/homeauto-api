@@ -14,7 +14,7 @@
 # Dependency directories (remove the comment below to include it)
 # vendor/
 
-scripts
-config/credentials.json
-config/config.yaml
-homeauto-api
+/scripts
+/config/credentials.json
+/config/config.yaml
+/homeauto-api

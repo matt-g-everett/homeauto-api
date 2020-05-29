@@ -8,8 +8,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"path"
-	"runtime"
 	"time"
 
 	"golang.org/x/oauth2"
@@ -24,6 +22,10 @@ type appConfig struct {
 
 type registrar struct {
 	config appConfig
+}
+
+type registerBody struct {
+	IP string `json:"ip"`
 }
 
 func newRegistrar(config appConfig) *registrar {
@@ -45,9 +47,10 @@ func (r *registrar) getWanIP() (string, error) {
 }
 
 func (r *registrar) createIdentityToken() (*oauth2.Token, error) {
-	_, filename, _, _ := runtime.Caller(0)
-	credentialsPath := path.Dir(filename) + "/config/credentials.json"
+	credentialsPath := "/etc/homeauto-api/credentials.json"
 
+	// Generate an identity token where the kid (private key id) matches the kid available
+	// in certificate 1 from here: https://www.googleapis.com/oauth2/v3/certs
 	aud := r.config.ClientID
 	ctx := context.Background()
 	ts, err := idtoken.NewTokenSource(ctx, aud, idtoken.WithCredentialsFile(credentialsPath))
@@ -60,9 +63,7 @@ func (r *registrar) createIdentityToken() (*oauth2.Token, error) {
 }
 
 func (r *registrar) callRegister(ip string, token oauth2.Token) {
-	data := struct {
-		IP string `json:"ip"`
-	}{ip}
+	data := registerBody{ip}
 	body, _ := json.Marshal(data)
 
 	client := &http.Client{}
@@ -73,15 +74,14 @@ func (r *registrar) callRegister(ip string, token oauth2.Token) {
 		return
 	}
 	req.Header.Add("Content-type", "application/json")
-	req.Header.Add("Accepts", "text/plain")
 	req.Header.Add("Authorization", "Bearer "+token.AccessToken)
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Printf("Failed to call register cloud function: %v", err)
 		return
 	}
-
 	defer resp.Body.Close()
+
 	if resp.StatusCode != 200 {
 		log.Printf("register cloud function failed with response code %d", resp.StatusCode)
 		return
@@ -91,15 +91,23 @@ func (r *registrar) callRegister(ip string, token oauth2.Token) {
 }
 
 func (r *registrar) register() {
-	token, _ := r.createIdentityToken()
-	ip, _ := r.getWanIP()
+	token, err := r.createIdentityToken()
+	if err != nil {
+		log.Printf("Failed to create identity token: %v", err)
+		return
+	}
+
+	ip, err := r.getWanIP()
+	if err != nil {
+		log.Printf("Failed to get WAN IP: %v", err)
+		return
+	}
 	log.Printf("Discovered WAN IP: %s\n", ip)
 	r.callRegister(ip, *token)
 }
 
 func main() {
-	_, filename, _, _ := runtime.Caller(0)
-	configPath := path.Dir(filename) + "/config/config.yaml"
+	configPath := "/etc/homeauto-api/config.yaml"
 
 	var config appConfig
 	f, err := os.Open(configPath)
@@ -111,7 +119,7 @@ func main() {
 
 	registrar := newRegistrar(config)
 	registrar.register()
-	registerTimer := time.NewTicker(5 * time.Second)
+	registerTimer := time.NewTicker(300 * time.Second)
 	for {
 		select {
 		case <-registerTimer.C:

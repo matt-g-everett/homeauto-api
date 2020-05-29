@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ template "homeauto-api.fullname" . }}
+  labels:
+    {{ include "homeauto-api.labels" . | indent 4 | trim }}
+spec:
+  minReadySeconds: 0
+  replicas: {{ .Values.replicaCount }}
+  strategy:
+    rollingUpdate: {maxSurge: 1, maxUnavailable: 0}
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      {{ include "homeauto-api.selectors" . | indent 6 | trim }}
+  template:
+    metadata:
+      creationTimestamp: null
+      labels:
+        {{ include "homeauto-api.labels" . | indent 8 | trim }}
+    spec:
+      securityContext:
+        fsGroup: 2
+      containers:
+      - name: homeauto-api
+        image: {{ include "homeauto-api.image" . | quote }}
+        imagePullPolicy: {{ template "homeauto-api.imagePullPolicy" . }}
+        ports:
+        - name: restapi
+          containerPort: 80
+        {{ include "homeauto-api.resources" . | indent 8 | trim }}
+        volumeMounts:
+        - name: config
+          mountPath: /etc/homeauto-api/config.yaml
+          subPath: config.yaml
+        - name: credentials
+          mountPath: /etc/homeauto-api/credentials.json
+          subPath: credentials.json
+      dnsPolicy: ClusterFirst
+      {{ include "homeauto-api.affinity" . | indent 6 | trim }}
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 0
+      volumes:
+      - name: config
+        configMap:
+          name: {{ template "homeauto-api.fullname" . }}-config
+      - name: credentials
+        secret:
+          secretName: {{ template "homeauto-api.fullname" . }}-credentials
