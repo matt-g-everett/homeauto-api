@@ -6,5 +6,6 @@ metadata:
     {{ include "homeauto-api.labels" . | indent 4 | trim }}
 data:
   config.yaml: |
+    port: 80
     registerFunction: {{ .Values.registration.functionUrl }}
     clientId: {{ .Values.clientId }}

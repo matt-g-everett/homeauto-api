@@ -4,18 +4,22 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"time"
 
+	"github.com/gorilla/mux"
 	"golang.org/x/oauth2"
 	"google.golang.org/api/idtoken"
 	"gopkg.in/yaml.v2"
 )
 
 type appConfig struct {
+	Port             int32  `json:"port"`
 	RegisterFunction string `yaml:"registerFunction"`
 	ClientID         string `yaml:"clientId"`
 }
@@ -106,17 +110,64 @@ func (r *registrar) register() {
 	r.callRegister(ip, *token)
 }
 
-func main() {
-	configPath := "/etc/homeauto-api/config.yaml"
+type envResponseBody struct {
+	PoolTemp  float32 `json:"poolTemp"`
+	ShadeTemp float32 `json:"shadeTemp"`
+	SunTemp   float32 `json:"sunTemp"`
+}
 
-	var config appConfig
-	f, err := os.Open(configPath)
-	if err != nil {
-		panic(err)
+func environmentHandler(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+	if r.Method == "GET" {
+		bodyData := envResponseBody{32.4, 22.3, 35.13}
+		body, _ := json.Marshal(bodyData)
+		w.Write(body)
 	}
-	decoder := yaml.NewDecoder(f)
-	err = decoder.Decode(&config)
+}
 
+func runAPI(config appConfig) {
+	r := mux.NewRouter()
+	r.HandleFunc("/api/environment", environmentHandler).Methods("GET", "HEAD")
+	http.Handle("/", r)
+
+	srv := &http.Server{
+		Addr: fmt.Sprintf("0.0.0.0:%d", config.Port),
+		// Good practice to set timeouts to avoid Slowloris attacks.
+		WriteTimeout: time.Second * 15,
+		ReadTimeout:  time.Second * 15,
+		IdleTimeout:  time.Second * 60,
+		Handler:      r, // Pass our instance of gorilla/mux in.
+	}
+
+	// Run our server in a goroutine so that it doesn't block.
+	go func() {
+		if err := srv.ListenAndServe(); err != nil {
+			log.Println(err)
+		}
+	}()
+
+	c := make(chan os.Signal, 1)
+	// We'll accept graceful shutdowns when quit via SIGINT (Ctrl+C)
+	// SIGKILL, SIGQUIT or SIGTERM (Ctrl+/) will not be caught.
+	signal.Notify(c, os.Interrupt)
+
+	// Block until we receive our signal.
+	<-c
+
+	// Create a deadline to wait for.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*15)
+	defer cancel()
+	// Doesn't block if no connections, but will otherwise wait
+	// until the timeout deadline.
+	srv.Shutdown(ctx)
+	// Optionally, you could run srv.Shutdown in a goroutine and block on
+	// <-ctx.Done() if your application should wait for other services
+	// to finalize based on context cancellation.
+	log.Println("shutting down")
+	os.Exit(0)
+}
+
+func runRegistration(config appConfig) {
 	registrar := newRegistrar(config)
 	registrar.register()
 	registerTimer := time.NewTicker(300 * time.Second)
@@ -126,4 +177,18 @@ func main() {
 			registrar.register()
 		}
 	}
+}
+
+func main() {
+	configPath := "/etc/homeauto-api/config.yaml"
+	f, err := os.Open(configPath)
+	if err != nil {
+		panic(err)
+	}
+	var config appConfig
+	decoder := yaml.NewDecoder(f)
+	err = decoder.Decode(&config)
+
+	go runRegistration(config)
+	runAPI(config)
 }
