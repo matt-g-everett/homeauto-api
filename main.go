@@ -129,43 +129,88 @@ type envResponseBody struct {
 	SunTemp   float32 `json:"sunTemp"`
 }
 
+func queryTemperatures() (temps *envResponseBody, err error) {
+	temps = &envResponseBody{}
+	query :=
+		`{
+			"query": {
+				"match_all": {}
+			},
+			"size": 10,
+			"sort": [
+				{
+					"@timestamp": {
+						"order": "desc"
+					}
+				}
+			]
+		}`
+
+	resp, err := http.Post("http://elasticsearch-master:9200/logstash-*/_search", "application/json",
+		bytes.NewBufferString(query))
+	if err != nil {
+		err = fmt.Errorf("Failed to query temperatures from elasticsearch. %v", err)
+		return
+	}
+
+	defer resp.Body.Close()
+	respBody, err := ioutil.ReadAll(resp.Body)
+	log.Printf("respBody: %s", string(respBody))
+	if err != nil {
+		err = fmt.Errorf("Failed to read elasticsearch response body. %v", err)
+		return
+	}
+	var esResp elasticResponse
+	json.Unmarshal(respBody, &esResp)
+	log.Printf("esRes: %+v", esResp)
+
+	// TODO: Move probe definitions into the config file
+	// Get the first value for each probe
+	probeCount := int8(3)
+	probes := map[string]bool{}
+	for _, hit := range esResp.Hits.Hits {
+		found := false
+		if !probes[hit.Source.ID] {
+			if hit.Source.ID == "b58945920f02" {
+				temps.PoolTemp = hit.Source.Temp
+				found = true
+			} else if hit.Source.ID == "aa5ec9491401" {
+				temps.ShadeTemp = hit.Source.Temp
+				found = true
+			} else if hit.Source.ID == "aaceb6491401" {
+				temps.SunTemp = hit.Source.Temp
+				found = true
+			}
+		}
+
+		if found {
+			probes[hit.Source.ID] = true
+			probeCount--
+		}
+
+		if probeCount == 0 {
+			break
+		}
+	}
+
+	if probeCount > 0 {
+		temps = nil
+	}
+
+	return
+}
+
 func environmentHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	if r.Method == "GET" {
-		query := `{
-	"query": {
-		"match_all": {}
-	},
-	"size": 10,
-	"sort": [
-		{
-			"@timestamp": {
-				"order": "desc"
-			}
-		}
-	]
-}`
-		resp, err := http.Post("http://elasticsearch-master:9200/logstash-*/_search", "application/json",
-			bytes.NewBufferString(query))
+		temps, err := queryTemperatures()
 		if err != nil {
-			log.Printf("Failed to query temperatures from elasticsearch")
 			w.WriteHeader(http.StatusServiceUnavailable)
+			log.Printf("Failed to query temperatures. %v", err)
 			return
 		}
-		defer resp.Body.Close()
-		respBody, err := ioutil.ReadAll(resp.Body)
-		log.Printf("respBody: %s", string(respBody))
-		if err != nil {
-			log.Printf("Failed to read elasticsearch response body")
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
-		var esResp elasticResponse
-		json.Unmarshal(respBody, &esResp)
-		log.Printf("esRes: %v", esResp)
 
-		bodyData := envResponseBody{32.4, 22.3, 35.13}
-		body, _ := json.Marshal(bodyData)
+		body, _ := json.Marshal(temps)
 		w.Write(body)
 	}
 }
