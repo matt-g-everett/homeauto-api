@@ -155,14 +155,12 @@ func queryTemperatures() (temps *envResponseBody, err error) {
 
 	defer resp.Body.Close()
 	respBody, err := ioutil.ReadAll(resp.Body)
-	log.Printf("respBody: %s", string(respBody))
 	if err != nil {
 		err = fmt.Errorf("Failed to read elasticsearch response body. %v", err)
 		return
 	}
 	var esResp elasticResponse
 	json.Unmarshal(respBody, &esResp)
-	log.Printf("esRes: %+v", esResp)
 
 	// TODO: Move probe definitions into the config file
 	// Get the first value for each probe
@@ -194,6 +192,7 @@ func queryTemperatures() (temps *envResponseBody, err error) {
 	}
 
 	if probeCount > 0 {
+		err = fmt.Errorf("Failed to find all temperature probes")
 		temps = nil
 	}
 
@@ -201,15 +200,15 @@ func queryTemperatures() (temps *envResponseBody, err error) {
 }
 
 func environmentHandler(w http.ResponseWriter, r *http.Request) {
+	temps, err := queryTemperatures()
+	if err != nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		log.Printf("Failed to query temperatures. %v", err)
+		return
+	}
 	w.WriteHeader(http.StatusOK)
-	if r.Method == "GET" {
-		temps, err := queryTemperatures()
-		if err != nil {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			log.Printf("Failed to query temperatures. %v", err)
-			return
-		}
 
+	if r.Method == "GET" {
 		body, _ := json.Marshal(temps)
 		w.Write(body)
 	}
@@ -270,6 +269,9 @@ func runRegistration(config appConfig) {
 }
 
 func main() {
+	// Send logs to stdout for k8s
+	log.SetOutput(os.Stdout)
+
 	configPath := "/etc/homeauto-api/config.yaml"
 	f, err := os.Open(configPath)
 	if err != nil {
