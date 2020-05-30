@@ -200,13 +200,15 @@ func queryTemperatures() (temps *envResponseBody, err error) {
 }
 
 func environmentHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
 	temps, err := queryTemperatures()
 	if err != nil {
 		w.WriteHeader(http.StatusServiceUnavailable)
+		w.Write([]byte("{}"))
 		log.Printf("Failed to query temperatures. %v", err)
 		return
 	}
-	w.WriteHeader(http.StatusOK)
 
 	if r.Method == "GET" {
 		body, _ := json.Marshal(temps)
