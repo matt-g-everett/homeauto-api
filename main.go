@@ -110,6 +110,19 @@ func (r *registrar) register() {
 	r.callRegister(ip, *token)
 }
 
+type hit struct {
+	Source struct {
+		ID   string  `json:"id"`
+		Temp float32 `json:"temp"`
+	} `json:"_source"`
+}
+
+type elasticResponse struct {
+	Hits struct {
+		Hits []hit `json:"hits"`
+	} `json:"hits"`
+}
+
 type envResponseBody struct {
 	PoolTemp  float32 `json:"poolTemp"`
 	ShadeTemp float32 `json:"shadeTemp"`
@@ -119,6 +132,38 @@ type envResponseBody struct {
 func environmentHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	if r.Method == "GET" {
+		query := `{
+	"query": {
+		"match_all": {}
+	},
+	"size": 10,
+	"sort": [
+		{
+			"@timestamp": {
+				"order": "desc"
+			}
+		}
+	]
+}`
+		resp, err := http.Post("http://elasticsearch-master:9200/logstash-*/_search", "application/json",
+			bytes.NewBufferString(query))
+		if err != nil {
+			log.Printf("Failed to query temperatures from elasticsearch")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		defer resp.Body.Close()
+		respBody, err := ioutil.ReadAll(resp.Body)
+		log.Printf("respBody: %s", string(respBody))
+		if err != nil {
+			log.Printf("Failed to read elasticsearch response body")
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		var esResp elasticResponse
+		json.Unmarshal(respBody, &esResp)
+		log.Printf("esRes: %v", esResp)
+
 		bodyData := envResponseBody{32.4, 22.3, 35.13}
 		body, _ := json.Marshal(bodyData)
 		w.Write(body)
